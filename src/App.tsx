@@ -164,6 +164,7 @@ function App() {
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
   const [activePlayerId, setActivePlayerId] = useState<string>(initialPlayers[0].id);
   const [isPlayersCollapsed, setIsPlayersCollapsed] = useState(false);
+  const [isActionLogCollapsed, setIsActionLogCollapsed] = useState(false);
   const [calcInput, setCalcInput] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
@@ -506,12 +507,22 @@ function App() {
           </div>
 
           <div className="rounded border border-slate-200 p-2">
-            <h3 className="mb-1 text-sm font-semibold">Action Log</h3>
-            <div className="max-h-48 space-y-1 overflow-auto text-xs">
-              {logs.map((log, i) => (
-                <p key={`${log}-${i}`}>{log}</p>
-              ))}
+            <div className="mb-1 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Action Log</h3>
+              <button
+                className="rounded border border-slate-300 px-2 py-0.5 text-xs"
+                onClick={() => setIsActionLogCollapsed((prev) => !prev)}
+              >
+                {isActionLogCollapsed ? 'Expand' : 'Collapse'}
+              </button>
             </div>
+            {!isActionLogCollapsed && (
+              <div className="max-h-48 space-y-1 overflow-auto text-xs">
+                {logs.map((log, i) => (
+                  <p key={`${log}-${i}`}>{log}</p>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -542,33 +553,12 @@ function App() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-4 gap-2">
-            {['+', '-', '*', '/'].map((op) => (
-              <button
-                key={op}
-                onClick={() => setCalcInput((prev) => prev + op)}
-                className="rounded border border-slate-300 bg-slate-100 p-2"
-              >
-                {op}
-              </button>
-            ))}
-          </div>
-
           <div className="mb-3 grid grid-cols-2 gap-2">
             <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor(totalPot / 2)))}>
               1/2 Pot
             </button>
             <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor((totalPot * 2) / 3)))}>
               2/3 Pot
-            </button>
-            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(totalPot))}>
-              Pot
-            </button>
-            <button
-              className="rounded border bg-slate-100 p-2"
-              onClick={() => setCalcInput(String(activePlayer.committedRound + activePlayer.stack))}
-            >
-              All-in Amt
             </button>
           </div>
 
