@@ -135,8 +135,18 @@ function App() {
 
   const handleBetRaise = () => {
     if (!Number.isFinite(evaluatedAmount) || evaluatedAmount <= 0) return;
-    const isRaise = evaluatedAmount > currentBet;
-    commitToAmount(activePlayer.id, evaluatedAmount, `${isRaise ? 'Raise' : 'Bet'} ${evaluatedAmount}`);
+    if (currentBet > 0 && evaluatedAmount < currentBet) return;
+
+    let actionLabel: 'Bet' | 'Raise' | 'Call' = 'Bet';
+    if (currentBet === 0) {
+      actionLabel = 'Bet';
+    } else if (evaluatedAmount === currentBet) {
+      actionLabel = 'Call';
+    } else {
+      actionLabel = 'Raise';
+    }
+
+    commitToAmount(activePlayer.id, evaluatedAmount, `${actionLabel} ${evaluatedAmount}`);
   };
 
   const handleAllIn = () => {
