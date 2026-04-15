@@ -50,7 +50,6 @@ function safeEval(raw: string): number {
   return Number(normalized);
 }
 
-function buildSidePots(players: Player[]): Pot[] {
   const contributors = players.filter((p) => p.committedHand > 0);
   if (contributors.length === 0) return [];
 
@@ -495,12 +494,18 @@ function App() {
             </button>
           </div>
         </section>
-      </div>
-
-      {isAdvanceStreetModalOpen && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
-            <h3 className="text-base font-semibold">次のストリートへ進みますか？</h3>
+              <p className="text-sm text-slate-700">勝者は一括選択です（サイドポットは参加資格に応じて自動按分）。</p>
+              <div className="mt-3 overflow-hidden rounded border border-slate-200">
+                      className={`flex w-full items-center justify-between border-b border-slate-200 px-3 py-2 text-left text-sm last:border-b-0 ${
+                        selected ? 'bg-green-50' : 'bg-white'
+                      <span className="font-medium text-slate-800">{p.name}</span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-semibold ${
+                          selected ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {selected ? '選択中' : '未選択'}
+                      </span>
             <p className="mt-2 text-sm text-slate-700">
               {streetLabelJa[currentStreet]} → {streetLabelJa[nextStreet]}
             </p>
