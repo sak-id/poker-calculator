@@ -18,7 +18,7 @@ type Pot = {
 
 type WinnerMap = Record<string, string[]>;
 
-type CommitKind = 'call' | 'betOrRaise' | 'allIn';
+type CommitKind = 'call' | 'betOrRaise';
 type Street = 'Preflop' | 'Flop' | 'Turn' | 'River' | 'Showdown';
 
 const DEFAULT_STACK = 1000;
@@ -168,7 +168,7 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
   const [streetIndex, setStreetIndex] = useState(0);
-  const [roundActionCount, setRoundActionCount] = useState(0);
+  const [actedPlayerIds, setActedPlayerIds] = useState<string[]>([]);
 
   const evaluatedAmount = useMemo(() => {
     const value = safeEval(calcInput);
@@ -182,10 +182,12 @@ function App() {
   const currentStreet = streetOrder[streetIndex];
   const nextStreet = streetOrder[Math.min(streetIndex + 1, streetOrder.length - 1)];
   const activeNotAllInPlayers = players.filter((p) => !p.folded && !p.allIn);
+  const activeNotAllInPlayerIds = activeNotAllInPlayers.map((p) => p.id);
   const isRoundBalanced =
-    activeNotAllInPlayers.length > 1 &&
+    activeNotAllInPlayers.length <= 1 ||
     activeNotAllInPlayers.every((p) => p.committedRound === activeNotAllInPlayers[0].committedRound);
-  const canAdvanceStreet = roundActionCount > 0 && isRoundBalanced && streetIndex < streetOrder.length - 1;
+  const allActionablePlayersActed = activeNotAllInPlayerIds.every((id) => actedPlayerIds.includes(id));
+  const canAdvanceStreet = allActionablePlayersActed && isRoundBalanced && streetIndex < streetOrder.length - 1;
 
   const patchPlayer = (id: string, updater: (p: Player) => Player) => {
     setPlayers((prev) => prev.map((p) => (p.id === id ? updater(p) : p)));
@@ -217,6 +219,7 @@ function App() {
     const betBeforeAction = getCurrentBet(players);
 
     let logLabel = '';
+    let nextActedPlayerIds = actedPlayerIds.includes(id) ? actedPlayerIds : [...actedPlayerIds, id];
     if (kind === 'call') {
       if (needed === 0) {
         logLabel = 'Check';
@@ -233,14 +236,15 @@ function App() {
       } else {
         logLabel = `Raise ${committedRoundAfter}`;
       }
-    } else {
-      logLabel = `All-in ${committedRoundAfter}`;
+      if (committedRoundAfter > betBeforeAction) {
+        nextActedPlayerIds = [id];
+      }
     }
 
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
     setCalcInput('');
-    setRoundActionCount((prev) => prev + 1);
+    setActedPlayerIds(nextActedPlayerIds);
     setLogs((prev) => [...prev, `${actorBefore.name}: ${logLabel}`]);
   };
 
@@ -250,7 +254,7 @@ function App() {
     const nextActive = nextActiveIdFrom(nextPlayers, activePlayer.id);
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
-    setRoundActionCount((prev) => prev + 1);
+    setActedPlayerIds((prev) => (prev.includes(activePlayer.id) ? prev : [...prev, activePlayer.id]));
     setLogs((prev) => [...prev, `${activePlayer.name}: Fold`]);
   };
 
@@ -274,7 +278,7 @@ function App() {
     const toStreet = nextStreet;
     setPlayers((prev) => prev.map((p) => ({ ...p, committedRound: 0 })));
     setStreetIndex((prev) => Math.min(prev + 1, streetOrder.length - 1));
-    setRoundActionCount(0);
+    setActedPlayerIds([]);
     setCalcInput('');
     setLogs((prev) => [...prev, `--- ${fromStreet} -> ${toStreet} ---`]);
   };
@@ -326,7 +330,7 @@ function App() {
     setCalcInput('');
     setWinners({});
     setStreetIndex(0);
-    setRoundActionCount(0);
+    setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
   };
 
@@ -344,7 +348,7 @@ function App() {
     setWinners({});
     setCalcInput('');
     setStreetIndex(0);
-    setRoundActionCount(0);
+    setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand reset (refund committed chips) ---']);
   };
 
