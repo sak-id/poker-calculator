@@ -45,82 +45,9 @@ const keypad = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '←'];
 
 function safeEval(raw: string): number {
   if (!raw.trim()) return 0;
-  if (!/^[0-9+\-*/ ().]+$/.test(raw)) return Number.NaN;
-
-  let index = 0;
-  const skipWhitespace = () => {
-    while (index < raw.length && /\s/.test(raw[index])) index += 1;
-  };
-
-  const parseNumber = (): number => {
-    skipWhitespace();
-    const start = index;
-    while (index < raw.length && /[0-9]/.test(raw[index])) index += 1;
-    if (start === index) throw new Error('Expected number');
-    return Number(raw.slice(start, index));
-  };
-
-  const parseFactor = (): number => {
-    skipWhitespace();
-    if (raw[index] === '(') {
-      index += 1;
-      const value = parseExpression();
-      skipWhitespace();
-      if (raw[index] !== ')') throw new Error('Expected closing parenthesis');
-      index += 1;
-      return value;
-    }
-    if (raw[index] === '+' || raw[index] === '-') {
-      const sign = raw[index] === '-' ? -1 : 1;
-      index += 1;
-      return sign * parseFactor();
-    }
-    return parseNumber();
-  };
-
-  const parseTerm = (): number => {
-    let value = parseFactor();
-    while (true) {
-      skipWhitespace();
-      if (raw[index] === '*') {
-        index += 1;
-        value *= parseFactor();
-      } else if (raw[index] === '/') {
-        index += 1;
-        const divisor = parseFactor();
-        if (divisor === 0) throw new Error('Division by zero');
-        value /= divisor;
-      } else {
-        break;
-      }
-    }
-    return value;
-  };
-
-  function parseExpression(): number {
-    let value = parseTerm();
-    while (true) {
-      skipWhitespace();
-      if (raw[index] === '+') {
-        index += 1;
-        value += parseTerm();
-      } else if (raw[index] === '-') {
-        index += 1;
-        value -= parseTerm();
-      } else {
-        break;
-      }
-    }
-    return value;
-  }
-
-  try {
-    const value = parseExpression();
-    skipWhitespace();
-    return index === raw.length ? value : Number.NaN;
-  } catch {
-    return Number.NaN;
-  }
+  const normalized = raw.replace(/\s+/g, '');
+  if (!/^[0-9]+$/.test(normalized)) return Number.NaN;
+  return Number(normalized);
 }
 
 function buildSidePots(players: Player[]): Pot[] {
@@ -510,12 +437,14 @@ function App() {
               <button
                 className="rounded border border-slate-300 px-2 py-0.5 text-xs"
                 onClick={() => setIsActionLogCollapsed((prev) => !prev)}
+                aria-expanded={!isActionLogCollapsed}
+                aria-controls="action-log-panel"
               >
                 {isActionLogCollapsed ? 'Expand' : 'Collapse'}
               </button>
             </div>
             {!isActionLogCollapsed && (
-              <div className="max-h-48 space-y-1 overflow-auto text-xs">
+              <div id="action-log-panel" className="max-h-48 space-y-1 overflow-auto text-xs">
                 {logs.map((log, i) => (
                   <p key={`${log}-${i}`}>{log}</p>
                 ))}
