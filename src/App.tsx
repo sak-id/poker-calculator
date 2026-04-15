@@ -45,82 +45,9 @@ const keypad = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '←'];
 
 function safeEval(raw: string): number {
   if (!raw.trim()) return 0;
-  if (!/^[0-9+\-*/ ().]+$/.test(raw)) return Number.NaN;
-
-  let index = 0;
-  const skipWhitespace = () => {
-    while (index < raw.length && /\s/.test(raw[index])) index += 1;
-  };
-
-  const parseNumber = (): number => {
-    skipWhitespace();
-    const start = index;
-    while (index < raw.length && /[0-9]/.test(raw[index])) index += 1;
-    if (start === index) throw new Error('Expected number');
-    return Number(raw.slice(start, index));
-  };
-
-  const parseFactor = (): number => {
-    skipWhitespace();
-    if (raw[index] === '(') {
-      index += 1;
-      const value = parseExpression();
-      skipWhitespace();
-      if (raw[index] !== ')') throw new Error('Expected closing parenthesis');
-      index += 1;
-      return value;
-    }
-    if (raw[index] === '+' || raw[index] === '-') {
-      const sign = raw[index] === '-' ? -1 : 1;
-      index += 1;
-      return sign * parseFactor();
-    }
-    return parseNumber();
-  };
-
-  const parseTerm = (): number => {
-    let value = parseFactor();
-    while (true) {
-      skipWhitespace();
-      if (raw[index] === '*') {
-        index += 1;
-        value *= parseFactor();
-      } else if (raw[index] === '/') {
-        index += 1;
-        const divisor = parseFactor();
-        if (divisor === 0) throw new Error('Division by zero');
-        value /= divisor;
-      } else {
-        break;
-      }
-    }
-    return value;
-  };
-
-  function parseExpression(): number {
-    let value = parseTerm();
-    while (true) {
-      skipWhitespace();
-      if (raw[index] === '+') {
-        index += 1;
-        value += parseTerm();
-      } else if (raw[index] === '-') {
-        index += 1;
-        value -= parseTerm();
-      } else {
-        break;
-      }
-    }
-    return value;
-  }
-
-  try {
-    const value = parseExpression();
-    skipWhitespace();
-    return index === raw.length ? value : Number.NaN;
-  } catch {
-    return Number.NaN;
-  }
+  const normalized = raw.replace(/\s+/g, '');
+  if (!/^[0-9]+$/.test(normalized)) return Number.NaN;
+  return Number(normalized);
 }
 
 function buildSidePots(players: Player[]): Pot[] {
@@ -149,6 +76,7 @@ function buildSidePots(players: Player[]): Pot[] {
 }
 
 const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committedRound), 0);
+const getNameBadge = (name: string) => (name.trim() || '??').slice(0, 2).toUpperCase();
 
 const nextActiveIdFrom = (players: Player[], fromId: string) => {
   const idx = players.findIndex((p) => p.id === fromId);
@@ -164,6 +92,7 @@ function App() {
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
   const [activePlayerId, setActivePlayerId] = useState<string>(initialPlayers[0].id);
   const [isPlayersCollapsed, setIsPlayersCollapsed] = useState(false);
+  const [isActionLogCollapsed, setIsActionLogCollapsed] = useState(false);
   const [calcInput, setCalcInput] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
@@ -291,6 +220,9 @@ function App() {
   const middleActionLabel = amountToCall === 0 ? 'Check' : amountToCall >= activePlayer.stack ? 'All-in' : 'Call';
 
   const handleWinnerToggle = (potId: string, playerId: string) => {
+    if (currentStreet !== 'Showdown') return;
+    const target = players.find((p) => p.id === playerId);
+    if (!target || target.folded) return;
     setWinners((prev) => {
       const existing = prev[potId] ?? [];
       const next = existing.includes(playerId)
@@ -332,24 +264,6 @@ function App() {
     setStreetIndex(0);
     setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
-  };
-
-  const resetHand = () => {
-    setPlayers((prev) =>
-      prev.map((p) => ({
-        ...p,
-        stack: p.stack + p.committedHand,
-        committedRound: 0,
-        committedHand: 0,
-        folded: false,
-        allIn: false,
-      })),
-    );
-    setWinners({});
-    setCalcInput('');
-    setStreetIndex(0);
-    setActedPlayerIds([]);
-    setLogs((prev) => [...prev, '--- Hand reset (refund committed chips) ---']);
   };
 
   const addPlayer = () => {
@@ -476,22 +390,37 @@ function App() {
                 <p className="text-sm font-medium">
                   {pot.id} - {pot.amount}
                 </p>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {players
-                    .filter((p) => pot.eligiblePlayerIds.includes(p.id))
-                    .map((p) => {
-                      const selected = (winners[pot.id] ?? []).includes(p.id);
-                      return (
-                        <button
-                          key={p.id}
-                          onClick={() => handleWinnerToggle(pot.id, p.id)}
-                          className={`rounded px-2 py-1 text-xs ${selected ? 'bg-green-600 text-white' : 'bg-slate-200'}`}
-                        >
-                          {p.name}
-                        </button>
-                      );
-                    })}
-                </div>
+                {currentStreet === 'Showdown' ? (
+                  <div className="mt-2 rounded-full border border-slate-300 bg-emerald-50 px-3 py-3">
+                    <div className="flex items-center justify-around gap-2 overflow-x-auto">
+                      {players
+                        .filter((p) => pot.eligiblePlayerIds.includes(p.id))
+                        .map((p) => {
+                          const selected = (winners[pot.id] ?? []).includes(p.id);
+                          return (
+                            <button
+                              key={p.id}
+                              onClick={() => handleWinnerToggle(pot.id, p.id)}
+                              disabled={p.folded}
+                              title={p.name}
+                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition ${
+                                p.folded
+                                  ? 'cursor-not-allowed border-slate-300 bg-slate-300 text-slate-600'
+                                  : selected
+                                    ? 'border-green-700 bg-green-600 text-white'
+                                    : 'border-slate-400 bg-white text-slate-700'
+                              }`}
+                            >
+                              {getNameBadge(p.name)}
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">ショーダウン中のみ勝者を選択できます（Foldは灰色表示）。</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">勝者選択はショーダウンで行います。</p>
+                )}
               </div>
             ))}
           </div>
@@ -500,18 +429,27 @@ function App() {
             <button className="rounded bg-green-600 px-3 py-1 text-white" onClick={settleHand}>
               Settle Hand
             </button>
-            <button className="rounded bg-slate-700 px-3 py-1 text-white" onClick={resetHand}>
-              Reset Hand
-            </button>
           </div>
 
           <div className="rounded border border-slate-200 p-2">
-            <h3 className="mb-1 text-sm font-semibold">Action Log</h3>
-            <div className="max-h-48 space-y-1 overflow-auto text-xs">
-              {logs.map((log, i) => (
-                <p key={`${log}-${i}`}>{log}</p>
-              ))}
+            <div className="mb-1 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Action Log</h3>
+              <button
+                className="rounded border border-slate-300 px-2 py-0.5 text-xs"
+                onClick={() => setIsActionLogCollapsed((prev) => !prev)}
+                aria-expanded={!isActionLogCollapsed}
+                aria-controls="action-log-panel"
+              >
+                {isActionLogCollapsed ? 'Expand' : 'Collapse'}
+              </button>
             </div>
+            {!isActionLogCollapsed && (
+              <div id="action-log-panel" className="max-h-48 space-y-1 overflow-auto text-xs">
+                {logs.map((log, i) => (
+                  <p key={`${log}-${i}`}>{log}</p>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -542,33 +480,12 @@ function App() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-4 gap-2">
-            {['+', '-', '*', '/'].map((op) => (
-              <button
-                key={op}
-                onClick={() => setCalcInput((prev) => prev + op)}
-                className="rounded border border-slate-300 bg-slate-100 p-2"
-              >
-                {op}
-              </button>
-            ))}
-          </div>
-
           <div className="mb-3 grid grid-cols-2 gap-2">
             <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor(totalPot / 2)))}>
               1/2 Pot
             </button>
             <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor((totalPot * 2) / 3)))}>
               2/3 Pot
-            </button>
-            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(totalPot))}>
-              Pot
-            </button>
-            <button
-              className="rounded border bg-slate-100 p-2"
-              onClick={() => setCalcInput(String(activePlayer.committedRound + activePlayer.stack))}
-            >
-              All-in Amt
             </button>
           </div>
 
