@@ -1,0 +1,507 @@
+import { useMemo, useState } from 'react';
+
+type Player = {
+  id: string;
+  name: string;
+  stack: number;
+  committed: number;
+  folded: boolean;
+  allIn: boolean;
+};
+
+type Pot = {
+  id: string;
+  amount: number;
+  eligiblePlayerIds: string[];
+};
+
+type WinnerMap = Record<string, string[]>;
+
+const DEFAULT_STACK = 1000;
+
+const initialPlayers = Array.from({ length: 4 }, (_, i) => ({
+  id: crypto.randomUUID(),
+  name: `Player ${i + 1}`,
+  stack: DEFAULT_STACK,
+  committed: 0,
+  folded: false,
+  allIn: false,
+}));
+
+const keypad = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '←'];
+
+function safeEval(raw: string): number {
+  if (!raw.trim()) return 0;
+  if (!/^[0-9+\-*/ ()]+$/.test(raw)) return Number.NaN;
+
+  let index = 0;
+
+  const skipWhitespace = () => {
+    while (index < raw.length && /\s/.test(raw[index])) {
+      index += 1;
+    }
+  };
+
+  const parseNumber = (): number => {
+    skipWhitespace();
+    const start = index;
+    while (index < raw.length && /[0-9]/.test(raw[index])) {
+      index += 1;
+    }
+
+    if (start === index) {
+      throw new Error('Expected number');
+    }
+
+    return Number(raw.slice(start, index));
+  };
+
+  const parseFactor = (): number => {
+    skipWhitespace();
+
+    if (raw[index] === '(') {
+      index += 1;
+      const value = parseExpression();
+      skipWhitespace();
+      if (raw[index] !== ')') {
+        throw new Error('Expected closing parenthesis');
+      }
+      index += 1;
+      return value;
+    }
+
+    if (raw[index] === '+' || raw[index] === '-') {
+      const sign = raw[index] === '-' ? -1 : 1;
+      index += 1;
+      return sign * parseFactor();
+    }
+
+    return parseNumber();
+  };
+
+  const parseTerm = (): number => {
+    let value = parseFactor();
+
+    while (true) {
+      skipWhitespace();
+      if (raw[index] === '*') {
+        index += 1;
+        value *= parseFactor();
+      } else if (raw[index] === '/') {
+        index += 1;
+        const divisor = parseFactor();
+        if (divisor === 0) throw new Error('Division by zero');
+        value /= divisor;
+      } else {
+        break;
+      }
+    }
+
+    return value;
+  };
+
+  function parseExpression(): number {
+    let value = parseTerm();
+
+    while (true) {
+      skipWhitespace();
+      if (raw[index] === '+') {
+        index += 1;
+        value += parseTerm();
+      } else if (raw[index] === '-') {
+        index += 1;
+        value -= parseTerm();
+      } else {
+        break;
+      }
+    }
+
+    return value;
+  }
+
+  try {
+    const value = parseExpression();
+    skipWhitespace();
+    if (index !== raw.length) return Number.NaN;
+    return value;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+function buildSidePots(players: Player[]): Pot[] {
+  const contributors = players.filter((p) => p.committed > 0);
+  if (contributors.length === 0) return [];
+
+  const levels = [...new Set(contributors.map((p) => p.committed))].sort((a, b) => a - b);
+  const pots: Pot[] = [];
+  let prev = 0;
+
+  levels.forEach((level, index) => {
+    const inLevel = contributors.filter((p) => p.committed >= level);
+    const amount = (level - prev) * inLevel.length;
+    if (amount > 0) {
+      const eligiblePlayerIds = inLevel.filter((p) => !p.folded).map((p) => p.id);
+      pots.push({
+        id: `pot-${index + 1}`,
+        amount,
+        eligiblePlayerIds,
+      });
+    }
+    prev = level;
+  });
+
+  return pots;
+}
+
+function App() {
+  const [players, setPlayers] = useState<Player[]>(initialPlayers);
+  const [activePlayerId, setActivePlayerId] = useState<string>(initialPlayers[0].id);
+  const [calcInput, setCalcInput] = useState('');
+  const [logs, setLogs] = useState<string[]>([]);
+  const [winners, setWinners] = useState<WinnerMap>({});
+
+  const evaluatedAmount = useMemo(() => {
+    const value = safeEval(calcInput);
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : Number.NaN;
+  }, [calcInput]);
+
+  const pots = useMemo(() => buildSidePots(players), [players]);
+  const totalPot = useMemo(() => players.reduce((sum, p) => sum + p.committed, 0), [players]);
+  const currentBet = useMemo(() => players.reduce((m, p) => Math.max(m, p.committed), 0), [players]);
+  const activePlayer = players.find((p) => p.id === activePlayerId) ?? players[0];
+
+  const nextActiveIdFrom = (list: Player[], fromId: string) => {
+    const idx = list.findIndex((p) => p.id === fromId);
+    if (idx === -1) return fromId;
+    for (let i = 1; i <= list.length; i += 1) {
+      const next = list[(idx + i) % list.length];
+      if (!next.folded && !next.allIn) return next.id;
+    }
+    return fromId;
+  };
+
+  const patchPlayer = (id: string, updater: (p: Player) => Player) => {
+    setPlayers((prev) => prev.map((p) => (p.id === id ? updater(p) : p)));
+  };
+
+  const commitToAmount = (id: string, targetCommitted: number, label: string) => {
+    let nextActive = id;
+    setPlayers((prev) => {
+      const nextPlayers = prev.map((p) => {
+        if (p.id !== id) return p;
+        const safeTarget = Math.max(0, targetCommitted);
+        const needed = Math.max(0, safeTarget - p.committed);
+        const putIn = Math.min(needed, p.stack);
+        const committed = p.committed + putIn;
+        const stack = p.stack - putIn;
+        return {
+          ...p,
+          committed,
+          stack,
+          allIn: stack === 0,
+        };
+      });
+      nextActive = nextActiveIdFrom(nextPlayers, id);
+      return nextPlayers;
+    });
+
+    setLogs((prev) => [...prev, `${activePlayer.name}: ${label}`]);
+    setActivePlayerId(nextActive);
+    setCalcInput('');
+  };
+
+  const handleFold = () => {
+    if (activePlayer.folded || activePlayer.allIn) return;
+    let nextActive = activePlayer.id;
+    setPlayers((prev) => {
+      const nextPlayers = prev.map((p) => (p.id === activePlayer.id ? { ...p, folded: true } : p));
+      nextActive = nextActiveIdFrom(nextPlayers, activePlayer.id);
+      return nextPlayers;
+    });
+    setLogs((prev) => [...prev, `${activePlayer.name}: Fold`]);
+    setActivePlayerId(nextActive);
+  };
+
+  const handleCall = () => {
+    if (activePlayer.folded || activePlayer.allIn) return;
+    const label = currentBet === 0 ? 'Check' : `Call ${currentBet}`;
+    commitToAmount(activePlayer.id, currentBet, label);
+  };
+
+  const handleBetRaise = () => {
+    if (activePlayer.folded || activePlayer.allIn) return;
+    if (!Number.isFinite(evaluatedAmount) || evaluatedAmount <= 0) return;
+    if (evaluatedAmount === currentBet) {
+      handleCall();
+      return;
+    }
+    if (evaluatedAmount < currentBet) return;
+
+    const label = currentBet === 0 ? `Bet ${evaluatedAmount}` : `Raise ${evaluatedAmount}`;
+    commitToAmount(activePlayer.id, evaluatedAmount, label);
+  };
+
+  const handleAllIn = () => {
+    if (activePlayer.folded || activePlayer.allIn) return;
+    const target = activePlayer.committed + activePlayer.stack;
+    commitToAmount(activePlayer.id, target, `All-in ${target}`);
+  };
+
+  const handleWinnerToggle = (potId: string, playerId: string) => {
+    setWinners((prev) => {
+      const existing = prev[potId] ?? [];
+      const next = existing.includes(playerId)
+        ? existing.filter((id) => id !== playerId)
+        : [...existing, playerId];
+      return { ...prev, [potId]: next };
+    });
+  };
+
+  const settleHand = () => {
+    const hasUnawardedPot = pots.some((pot) => {
+      if (pot.amount <= 0) return false;
+      const winnersForPot = (winners[pot.id] ?? []).filter((id) => pot.eligiblePlayerIds.includes(id));
+      return winnersForPot.length === 0;
+    });
+    if (hasUnawardedPot) {
+      setLogs((prev) => [...prev, 'Cannot settle hand: select at least one eligible winner for every pot.']);
+      return;
+    }
+
+    const payouts = new Map<string, number>();
+
+    for (const pot of pots) {
+      const winnersForPot = (winners[pot.id] ?? []).filter((id) => pot.eligiblePlayerIds.includes(id));
+      if (winnersForPot.length === 0) continue;
+      const share = Math.floor(pot.amount / winnersForPot.length);
+      const remainder = pot.amount % winnersForPot.length;
+
+      winnersForPot.forEach((id, index) => {
+        const current = payouts.get(id) ?? 0;
+        const bonus = index < remainder ? 1 : 0;
+        payouts.set(id, current + share + bonus);
+      });
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) => ({
+        ...p,
+        stack: p.stack + (payouts.get(p.id) ?? 0),
+        committed: 0,
+        folded: false,
+        allIn: false,
+      })),
+    );
+
+    setCalcInput('');
+    setWinners({});
+    setLogs((prev) => [...prev, '--- Hand settled ---']);
+  };
+
+  const resetHand = () => {
+    setPlayers((prev) => prev.map((p) => ({ ...p, committed: 0, folded: false, allIn: false })));
+    setWinners({});
+    setCalcInput('');
+    setLogs((prev) => [...prev, '--- Hand reset ---']);
+  };
+
+  const addPlayer = () => {
+    setPlayers((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        name: `Player ${prev.length + 1}`,
+        stack: DEFAULT_STACK,
+        committed: 0,
+        folded: false,
+        allIn: false,
+      },
+    ]);
+  };
+
+  const activePlayerLocked = activePlayer.folded || activePlayer.allIn;
+
+  return (
+    <main className="min-h-screen bg-slate-100 p-4 text-slate-900">
+      <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[1.2fr_0.9fr_1fr]">
+        <section className="rounded-xl bg-white p-4 shadow">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Players</h2>
+            <button className="rounded bg-slate-900 px-3 py-1 text-sm text-white" onClick={addPlayer}>
+              + Add
+            </button>
+          </div>
+          <div className="space-y-2">
+            {players.map((p) => {
+              const active = p.id === activePlayerId;
+              return (
+                <div
+                  key={p.id}
+                  className={`rounded border p-2 ${active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'}`}
+                >
+                  <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2">
+                    <input
+                      aria-label={`${p.name} name`}
+                      value={p.name}
+                      onChange={(e) => patchPlayer(p.id, (x) => ({ ...x, name: e.target.value }))}
+                      className="rounded border px-2 py-1"
+                    />
+                    <span className="text-xs text-slate-500">Stack</span>
+                    <input
+                      aria-label={`${p.name} stack`}
+                      type="number"
+                      min={0}
+                      value={p.stack}
+                      onChange={(e) =>
+                        patchPlayer(p.id, (x) => ({ ...x, stack: Math.max(0, Number(e.target.value || 0)) }))
+                      }
+                      className="w-24 rounded border px-2 py-1"
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 text-sm">
+                    <span>Committed: {p.committed}</span>
+                    {p.folded && <span className="rounded bg-slate-200 px-2 py-0.5">Fold</span>}
+                    {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
+                    <button
+                      onClick={() => setActivePlayerId(p.id)}
+                      disabled={p.folded || p.allIn}
+                      className="ml-auto rounded border px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Select
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="space-y-4 rounded-xl bg-white p-4 shadow">
+          <h2 className="text-lg font-semibold">Pot & Showdown</h2>
+          <div className="rounded border border-slate-200 bg-slate-50 p-3">
+            <p className="text-sm">Current Bet: {currentBet}</p>
+            <p className="text-sm font-medium">Total Pot: {totalPot}</p>
+          </div>
+
+          <div className="space-y-2">
+            {pots.length === 0 && <p className="text-sm text-slate-500">ポットはまだありません。</p>}
+            {pots.map((pot) => (
+              <div key={pot.id} className="rounded border border-slate-200 p-2">
+                <p className="text-sm font-medium">
+                  {pot.id} - {pot.amount}
+                </p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {players
+                    .filter((p) => pot.eligiblePlayerIds.includes(p.id))
+                    .map((x) => {
+                      const selected = (winners[pot.id] ?? []).includes(x.id);
+                      return (
+                        <button
+                          key={x.id}
+                          onClick={() => handleWinnerToggle(pot.id, x.id)}
+                          className={`rounded px-2 py-1 text-xs ${selected ? 'bg-green-600 text-white' : 'bg-slate-200'}`}
+                        >
+                          {x.name}
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded bg-green-600 px-3 py-1 text-white" onClick={settleHand}>
+              Settle Hand
+            </button>
+            <button className="rounded bg-slate-700 px-3 py-1 text-white" onClick={resetHand}>
+              Reset Hand
+            </button>
+          </div>
+
+          <div className="rounded border border-slate-200 p-2">
+            <h3 className="mb-1 text-sm font-semibold">Action Log</h3>
+            <div className="max-h-48 space-y-1 overflow-auto text-xs">
+              {logs.map((log, i) => (
+                <p key={`${log}-${i}`}>{log}</p>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl bg-white p-4 shadow">
+          <h2 className="mb-2 text-lg font-semibold">Calculator / Action</h2>
+          <p className="mb-2 text-sm text-slate-600">Active: {activePlayer?.name}</p>
+
+          <div className="mb-2 rounded border border-slate-300 bg-slate-50 p-3">
+            <p className="truncate text-sm">{calcInput || '0'}</p>
+            <p className="text-lg font-semibold">= {Number.isFinite(evaluatedAmount) ? evaluatedAmount : 'ERR'}</p>
+          </div>
+
+          <div className="mb-2 grid grid-cols-3 gap-2">
+            {keypad.map((k) => (
+              <button
+                key={k}
+                onClick={() => {
+                  if (k === '←') {
+                    setCalcInput((prev) => prev.slice(0, -1));
+                    return;
+                  }
+                  setCalcInput((prev) => prev + k);
+                }}
+                className="rounded border border-slate-300 bg-slate-100 p-2 text-sm"
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+
+          <div className="mb-3 grid grid-cols-4 gap-2">
+            {['+', '-', '*', '/'].map((op) => (
+              <button
+                key={op}
+                onClick={() => setCalcInput((prev) => prev + op)}
+                className="rounded border border-slate-300 bg-slate-100 p-2"
+              >
+                {op}
+              </button>
+            ))}
+          </div>
+
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor(totalPot / 2)))}>
+              1/2 Pot
+            </button>
+            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor((totalPot * 2) / 3)))}>
+              2/3 Pot
+            </button>
+            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(totalPot))}>
+              Pot
+            </button>
+            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(activePlayer.committed + activePlayer.stack))}>
+              All-in Amt
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <button className="rounded bg-slate-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40" onClick={handleFold} disabled={activePlayerLocked}>
+              Fold
+            </button>
+            <button className="rounded bg-blue-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40" onClick={handleCall} disabled={activePlayerLocked}>
+              Call
+            </button>
+            <button className="rounded bg-indigo-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40" onClick={handleBetRaise} disabled={activePlayerLocked}>
+              Bet / Raise
+            </button>
+            <button className="rounded bg-amber-600 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40" onClick={handleAllIn} disabled={activePlayerLocked}>
+              All-in
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+export default App;
