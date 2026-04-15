@@ -152,6 +152,7 @@ const nextActiveIdFrom = (players: Player[], fromId: string) => {
 function App() {
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
   const [activePlayerId, setActivePlayerId] = useState<string>(initialPlayers[0].id);
+  const [isPlayersCollapsed, setIsPlayersCollapsed] = useState(false);
   const [calcInput, setCalcInput] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
@@ -310,58 +311,89 @@ function App() {
     ]);
   };
 
+  const removePlayer = (id: string) => {
+    setPlayers((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((p) => p.id !== id);
+      setWinners((winnerMap) =>
+        Object.fromEntries(
+          Object.entries(winnerMap).map(([potId, winnerIds]) => [potId, winnerIds.filter((winnerId) => winnerId !== id)]),
+        ),
+      );
+
+      if (activePlayerId === id && next.length > 0) {
+        setActivePlayerId(next[0].id);
+      }
+      return next;
+    });
+  };
+
   return (
     <main className="min-h-screen bg-slate-100 p-4 text-slate-900">
       <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[1.2fr_0.9fr_1fr]">
         <section className="rounded-xl bg-white p-4 shadow">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Players</h2>
-            <button className="rounded bg-slate-900 px-3 py-1 text-sm text-white" onClick={addPlayer}>
-              + Add
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded border border-slate-300 px-3 py-1 text-sm"
+                onClick={() => setIsPlayersCollapsed((prev) => !prev)}
+              >
+                {isPlayersCollapsed ? 'Expand' : 'Collapse'}
+              </button>
+              <button className="rounded bg-slate-900 px-3 py-1 text-sm text-white" onClick={addPlayer}>
+                + Add
+              </button>
+            </div>
           </div>
-          <div className="space-y-2">
-            {players.map((p) => {
-              const active = p.id === activePlayerId;
-              return (
-                <div
-                  key={p.id}
-                  className={`rounded border p-2 ${active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'}`}
-                >
-                  <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2">
-                    <input
-                      aria-label={`${p.name} name`}
-                      value={p.name}
-                      onChange={(e) => patchPlayer(p.id, (x) => ({ ...x, name: e.target.value }))}
-                      className="rounded border px-2 py-1"
-                    />
-                    <span className="text-xs text-slate-500">Stack</span>
-                    <input
-                      aria-label={`${p.name} stack`}
-                      type="number"
-                      min={0}
-                      value={p.stack}
-                      onChange={(e) =>
-                        patchPlayer(p.id, (x) => ({ ...x, stack: Math.max(0, Number(e.target.value || 0)) }))
-                      }
-                      className="w-24 rounded border px-2 py-1"
-                    />
+          {!isPlayersCollapsed && (
+            <div className="space-y-2">
+              {players.map((p) => {
+                const active = p.id === activePlayerId;
+                return (
+                  <div
+                    key={p.id}
+                    className={`rounded border p-2 ${active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'}`}
+                  >
+                    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2">
+                      <input
+                        aria-label={`${p.name} name`}
+                        value={p.name}
+                        onChange={(e) => patchPlayer(p.id, (x) => ({ ...x, name: e.target.value }))}
+                        className="rounded border px-2 py-1"
+                      />
+                      <span className="text-xs text-slate-500">Stack</span>
+                      <input
+                        aria-label={`${p.name} stack`}
+                        type="number"
+                        min={0}
+                        value={p.stack}
+                        onChange={(e) =>
+                          patchPlayer(p.id, (x) => ({ ...x, stack: Math.max(0, Number(e.target.value || 0)) }))
+                        }
+                        className="w-24 rounded border px-2 py-1"
+                      />
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 text-sm">
+                      <span>Committed: {p.committed}</span>
+                      {p.folded && <span className="rounded bg-slate-200 px-2 py-0.5">Fold</span>}
+                      {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
+                      <button
+                        onClick={() => removePlayer(p.id)}
+                        disabled={players.length <= 1}
+                        className="ml-auto rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Delete
+                      </button>
+                      <button onClick={() => setActivePlayerId(p.id)} className="rounded border px-2 py-0.5 text-xs">
+                        Select
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-2 text-sm">
-                    <span>Committed: {p.committed}</span>
-                    {p.folded && <span className="rounded bg-slate-200 px-2 py-0.5">Fold</span>}
-                    {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
-                    <button
-                      onClick={() => setActivePlayerId(p.id)}
-                      className="ml-auto rounded border px-2 py-0.5 text-xs"
-                    >
-                      Select
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         <section className="space-y-4 rounded-xl bg-white p-4 shadow">
