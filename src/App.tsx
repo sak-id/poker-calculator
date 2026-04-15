@@ -4,7 +4,8 @@ type Player = {
   id: string;
   name: string;
   stack: number;
-  committed: number;
+  committedRound: number;
+  committedHand: number;
   folded: boolean;
   allIn: boolean;
 };
@@ -17,15 +18,25 @@ type Pot = {
 
 type WinnerMap = Record<string, string[]>;
 
-type CommitKind = 'call' | 'betOrRaise' | 'allIn';
+type CommitKind = 'call' | 'betOrRaise';
+type Street = 'Preflop' | 'Flop' | 'Turn' | 'River' | 'Showdown';
 
 const DEFAULT_STACK = 1000;
+const streetOrder: Street[] = ['Preflop', 'Flop', 'Turn', 'River', 'Showdown'];
+const streetLabelJa: Record<Street, string> = {
+  Preflop: 'プリフロップ',
+  Flop: 'フロップ',
+  Turn: 'ターン',
+  River: 'リバー',
+  Showdown: 'ショーダウン',
+};
 
 const initialPlayers = Array.from({ length: 4 }, (_, i) => ({
   id: crypto.randomUUID(),
   name: `Player ${i + 1}`,
   stack: DEFAULT_STACK,
-  committed: 0,
+  committedRound: 0,
+  committedHand: 0,
   folded: false,
   allIn: false,
 }));
@@ -113,15 +124,15 @@ function safeEval(raw: string): number {
 }
 
 function buildSidePots(players: Player[]): Pot[] {
-  const contributors = players.filter((p) => p.committed > 0);
+  const contributors = players.filter((p) => p.committedHand > 0);
   if (contributors.length === 0) return [];
 
-  const levels = [...new Set(contributors.map((p) => p.committed))].sort((a, b) => a - b);
+  const levels = [...new Set(contributors.map((p) => p.committedHand))].sort((a, b) => a - b);
   const pots: Pot[] = [];
   let prev = 0;
 
   levels.forEach((level) => {
-    const inLevel = contributors.filter((p) => p.committed >= level);
+    const inLevel = contributors.filter((p) => p.committedHand >= level);
     const amount = (level - prev) * inLevel.length;
     if (amount > 0) {
       const eligiblePlayerIds = inLevel.filter((p) => !p.folded).map((p) => p.id);
@@ -137,7 +148,7 @@ function buildSidePots(players: Player[]): Pot[] {
   return pots;
 }
 
-const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committed), 0);
+const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committedRound), 0);
 
 const nextActiveIdFrom = (players: Player[], fromId: string) => {
   const idx = players.findIndex((p) => p.id === fromId);
@@ -156,6 +167,8 @@ function App() {
   const [calcInput, setCalcInput] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
+  const [streetIndex, setStreetIndex] = useState(0);
+  const [actedPlayerIds, setActedPlayerIds] = useState<string[]>([]);
 
   const evaluatedAmount = useMemo(() => {
     const value = safeEval(calcInput);
@@ -163,54 +176,75 @@ function App() {
   }, [calcInput]);
 
   const pots = useMemo(() => buildSidePots(players), [players]);
-  const totalPot = useMemo(() => players.reduce((sum, p) => sum + p.committed, 0), [players]);
+  const totalPot = useMemo(() => players.reduce((sum, p) => sum + p.committedHand, 0), [players]);
   const currentBet = useMemo(() => getCurrentBet(players), [players]);
   const activePlayer = players.find((p) => p.id === activePlayerId) ?? players[0];
+  const currentStreet = streetOrder[streetIndex];
+  const nextStreet = streetOrder[Math.min(streetIndex + 1, streetOrder.length - 1)];
+  const activeNotAllInPlayers = players.filter((p) => !p.folded && !p.allIn);
+  const activeNotAllInPlayerIds = activeNotAllInPlayers.map((p) => p.id);
+  const isRoundBalanced =
+    activeNotAllInPlayers.length <= 1 ||
+    activeNotAllInPlayers.every((p) => p.committedRound === activeNotAllInPlayers[0].committedRound);
+  const allActionablePlayersActed = activeNotAllInPlayerIds.every((id) => actedPlayerIds.includes(id));
+  const canAdvanceStreet = allActionablePlayersActed && isRoundBalanced && streetIndex < streetOrder.length - 1;
 
   const patchPlayer = (id: string, updater: (p: Player) => Player) => {
     setPlayers((prev) => prev.map((p) => (p.id === id ? updater(p) : p)));
   };
 
-  const commitToAmount = (id: string, targetCommitted: number, kind: CommitKind) => {
+  const commitToAmount = (id: string, targetCommittedRound: number, kind: CommitKind) => {
     const actorBefore = players.find((p) => p.id === id);
     if (!actorBefore || actorBefore.folded) return;
 
-    const safeTarget = Math.max(0, targetCommitted);
-    const needed = Math.max(0, safeTarget - actorBefore.committed);
+    const safeTarget = Math.max(0, targetCommittedRound);
+    const needed = Math.max(0, safeTarget - actorBefore.committedRound);
     const putIn = Math.min(needed, actorBefore.stack);
-    const committedAfter = actorBefore.committed + putIn;
+    const committedRoundAfter = actorBefore.committedRound + putIn;
+    const committedHandAfter = actorBefore.committedHand + putIn;
     const stackAfter = actorBefore.stack - putIn;
 
     const nextPlayers = players.map((p) =>
-      p.id === id ? { ...p, committed: committedAfter, stack: stackAfter, allIn: stackAfter === 0 } : p,
+      p.id === id
+        ? {
+            ...p,
+            committedRound: committedRoundAfter,
+            committedHand: committedHandAfter,
+            stack: stackAfter,
+            allIn: stackAfter === 0,
+          }
+        : p,
     );
     const nextActive = nextActiveIdFrom(nextPlayers, id);
     const betBeforeAction = getCurrentBet(players);
 
     let logLabel = '';
+    let nextActedPlayerIds = actedPlayerIds.includes(id) ? actedPlayerIds : [...actedPlayerIds, id];
     if (kind === 'call') {
-      if (betBeforeAction === 0) {
+      if (needed === 0) {
         logLabel = 'Check';
-      } else if (stackAfter === 0 && committedAfter < betBeforeAction) {
-        logLabel = `All-in Call ${committedAfter}`;
+      } else if (stackAfter === 0 && committedRoundAfter < betBeforeAction) {
+        logLabel = `All-in Call ${committedRoundAfter}`;
       } else {
-        logLabel = `Call ${committedAfter}`;
+        logLabel = `Call ${committedRoundAfter}`;
       }
     } else if (kind === 'betOrRaise') {
-      if (stackAfter === 0 && committedAfter < safeTarget) {
-        logLabel = `All-in ${committedAfter}`;
+      if (stackAfter === 0 && committedRoundAfter < safeTarget) {
+        logLabel = `All-in ${committedRoundAfter}`;
       } else if (betBeforeAction === 0) {
-        logLabel = `Bet ${committedAfter}`;
+        logLabel = `Bet ${committedRoundAfter}`;
       } else {
-        logLabel = `Raise ${committedAfter}`;
+        logLabel = `Raise ${committedRoundAfter}`;
       }
-    } else {
-      logLabel = `All-in ${committedAfter}`;
+      if (committedRoundAfter > betBeforeAction) {
+        nextActedPlayerIds = [id];
+      }
     }
 
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
     setCalcInput('');
+    setActedPlayerIds(nextActedPlayerIds);
     setLogs((prev) => [...prev, `${actorBefore.name}: ${logLabel}`]);
   };
 
@@ -220,6 +254,7 @@ function App() {
     const nextActive = nextActiveIdFrom(nextPlayers, activePlayer.id);
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
+    setActedPlayerIds((prev) => (prev.includes(activePlayer.id) ? prev : [...prev, activePlayer.id]));
     setLogs((prev) => [...prev, `${activePlayer.name}: Fold`]);
   };
 
@@ -237,9 +272,23 @@ function App() {
     commitToAmount(activePlayer.id, evaluatedAmount, 'betOrRaise');
   };
 
-  const handleAllIn = () => {
-    commitToAmount(activePlayer.id, activePlayer.committed + activePlayer.stack, 'allIn');
+  const advanceStreet = () => {
+    if (!canAdvanceStreet) return;
+    const fromStreet = currentStreet;
+    const toStreet = nextStreet;
+    setPlayers((prev) => prev.map((p) => ({ ...p, committedRound: 0 })));
+    setStreetIndex((prev) => Math.min(prev + 1, streetOrder.length - 1));
+    setActedPlayerIds([]);
+    setCalcInput('');
+    setLogs((prev) => [...prev, `--- ${fromStreet} -> ${toStreet} ---`]);
   };
+
+  const handleCheckCallAllIn = () => {
+    commitToAmount(activePlayer.id, currentBet, 'call');
+  };
+
+  const amountToCall = Math.max(0, currentBet - activePlayer.committedRound);
+  const middleActionLabel = amountToCall === 0 ? 'Check' : amountToCall >= activePlayer.stack ? 'All-in' : 'Call';
 
   const handleWinnerToggle = (potId: string, playerId: string) => {
     setWinners((prev) => {
@@ -271,7 +320,8 @@ function App() {
       prev.map((p) => ({
         ...p,
         stack: p.stack + (payouts.get(p.id) ?? 0),
-        committed: 0,
+        committedRound: 0,
+        committedHand: 0,
         folded: false,
         allIn: false,
       })),
@@ -279,6 +329,8 @@ function App() {
 
     setCalcInput('');
     setWinners({});
+    setStreetIndex(0);
+    setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
   };
 
@@ -286,14 +338,17 @@ function App() {
     setPlayers((prev) =>
       prev.map((p) => ({
         ...p,
-        stack: p.stack + p.committed,
-        committed: 0,
+        stack: p.stack + p.committedHand,
+        committedRound: 0,
+        committedHand: 0,
         folded: false,
         allIn: false,
       })),
     );
     setWinners({});
     setCalcInput('');
+    setStreetIndex(0);
+    setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand reset (refund committed chips) ---']);
   };
 
@@ -304,7 +359,8 @@ function App() {
         id: crypto.randomUUID(),
         name: `Player ${prev.length + 1}`,
         stack: DEFAULT_STACK,
-        committed: 0,
+        committedRound: 0,
+        committedHand: 0,
         folded: false,
         allIn: false,
       },
@@ -375,7 +431,7 @@ function App() {
                       />
                     </div>
                     <div className="mt-2 flex items-center gap-2 text-sm">
-                      <span>Committed: {p.committed}</span>
+                      <span>Committed: {p.committedHand}</span>
                       {p.folded && <span className="rounded bg-slate-200 px-2 py-0.5">Fold</span>}
                       {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
                       <button
@@ -399,9 +455,19 @@ function App() {
         <section className="space-y-4 rounded-xl bg-white p-4 shadow">
           <h2 className="text-lg font-semibold">Pot & Showdown</h2>
           <div className="rounded border border-slate-200 bg-slate-50 p-3">
+            <p className="text-sm">Street: {streetLabelJa[currentStreet]}</p>
             <p className="text-sm">Current Bet: {currentBet}</p>
             <p className="text-sm font-medium">Total Pot: {totalPot}</p>
           </div>
+
+          {canAdvanceStreet && (
+            <div className="rounded border border-blue-300 bg-blue-50 p-3">
+              <p className="text-sm font-medium">次: {streetLabelJa[nextStreet]}</p>
+              <button className="mt-2 rounded bg-blue-700 px-3 py-1 text-sm text-white" onClick={advanceStreet}>
+                OK
+              </button>
+            </div>
+          )}
 
           <div className="space-y-2">
             {pots.length === 0 && <p className="text-sm text-slate-500">ポットはまだありません。</p>}
@@ -498,23 +564,23 @@ function App() {
             <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(totalPot))}>
               Pot
             </button>
-            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(activePlayer.committed + activePlayer.stack))}>
+            <button
+              className="rounded border bg-slate-100 p-2"
+              onClick={() => setCalcInput(String(activePlayer.committedRound + activePlayer.stack))}
+            >
               All-in Amt
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button className="rounded bg-slate-700 p-2 text-white" onClick={handleFold}>
-              Fold
-            </button>
-            <button className="rounded bg-blue-700 p-2 text-white" onClick={handleCall}>
-              Call
-            </button>
+          <div className="grid grid-cols-3 gap-2">
             <button className="rounded bg-indigo-700 p-2 text-white" onClick={handleBetRaise}>
               Bet / Raise
             </button>
-            <button className="rounded bg-amber-600 p-2 text-white" onClick={handleAllIn}>
-              All-in
+            <button className="rounded bg-blue-700 p-2 text-white" onClick={handleCheckCallAllIn}>
+              {middleActionLabel}
+            </button>
+            <button className="rounded bg-slate-700 p-2 text-white" onClick={handleFold}>
+              Fold
             </button>
           </div>
         </section>
