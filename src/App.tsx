@@ -16,8 +16,6 @@ type Pot = {
   eligiblePlayerIds: string[];
 };
 
-type WinnerMap = Record<string, string[]>;
-
 type CommitKind = 'call' | 'betOrRaise';
 type Street = 'Preflop' | 'Flop' | 'Turn' | 'River' | 'Showdown';
 
@@ -76,7 +74,6 @@ function buildSidePots(players: Player[]): Pot[] {
 }
 
 const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committedRound), 0);
-const getNameBadge = (name: string) => (name.trim() || '??').slice(0, 2).toUpperCase();
 
 const nextActiveIdFrom = (players: Player[], fromId: string) => {
   const idx = players.findIndex((p) => p.id === fromId);
@@ -95,7 +92,10 @@ function App() {
   const [isActionLogCollapsed, setIsActionLogCollapsed] = useState(false);
   const [calcInput, setCalcInput] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
-  const [winners, setWinners] = useState<WinnerMap>({});
+  const [winnerIds, setWinnerIds] = useState<string[]>([]);
+  const [isAdvanceStreetModalOpen, setIsAdvanceStreetModalOpen] = useState(false);
+  const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
+  const [isWinnerConfirmModalOpen, setIsWinnerConfirmModalOpen] = useState(false);
   const [streetIndex, setStreetIndex] = useState(0);
   const [actedPlayerIds, setActedPlayerIds] = useState<string[]>([]);
 
@@ -117,6 +117,31 @@ function App() {
     activeNotAllInPlayers.every((p) => p.committedRound === activeNotAllInPlayers[0].committedRound);
   const allActionablePlayersActed = activeNotAllInPlayerIds.every((id) => actedPlayerIds.includes(id));
   const canAdvanceStreet = allActionablePlayersActed && isRoundBalanced && streetIndex < streetOrder.length - 1;
+  const winnerPreview = useMemo(() => {
+    const payouts = new Map<string, number>();
+
+    for (const pot of pots) {
+      const winnersForPot = winnerIds.filter((id) => pot.eligiblePlayerIds.includes(id));
+      if (winnersForPot.length === 0) continue;
+
+      const share = Math.floor(pot.amount / winnersForPot.length);
+      const remainder = pot.amount % winnersForPot.length;
+
+      winnersForPot.forEach((id, index) => {
+        const current = payouts.get(id) ?? 0;
+        const bonus = index < remainder ? 1 : 0;
+        payouts.set(id, current + share + bonus);
+      });
+    }
+
+    return players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      currentStack: p.stack,
+      gain: payouts.get(p.id) ?? 0,
+      nextStack: p.stack + (payouts.get(p.id) ?? 0),
+    }));
+  }, [players, pots, winnerIds]);
 
   const patchPlayer = (id: string, updater: (p: Player) => Player) => {
     setPlayers((prev) => prev.map((p) => (p.id === id ? updater(p) : p)));
@@ -219,16 +244,13 @@ function App() {
   const amountToCall = Math.max(0, currentBet - activePlayer.committedRound);
   const middleActionLabel = amountToCall === 0 ? 'Check' : amountToCall >= activePlayer.stack ? 'All-in' : 'Call';
 
-  const handleWinnerToggle = (potId: string, playerId: string) => {
+  const handleWinnerToggle = (playerId: string) => {
     if (currentStreet !== 'Showdown') return;
     const target = players.find((p) => p.id === playerId);
     if (!target || target.folded) return;
-    setWinners((prev) => {
-      const existing = prev[potId] ?? [];
-      const next = existing.includes(playerId)
-        ? existing.filter((x) => x !== playerId)
-        : [...existing, playerId];
-      return { ...prev, [potId]: next };
+    setWinnerIds((prev) => {
+      const next = prev.includes(playerId) ? prev.filter((x) => x !== playerId) : [...prev, playerId];
+      return next;
     });
   };
 
@@ -236,7 +258,7 @@ function App() {
     const payouts = new Map<string, number>();
 
     for (const pot of pots) {
-      const winnersForPot = (winners[pot.id] ?? []).filter((id) => pot.eligiblePlayerIds.includes(id));
+      const winnersForPot = winnerIds.filter((id) => pot.eligiblePlayerIds.includes(id));
       if (winnersForPot.length === 0) continue;
       const share = Math.floor(pot.amount / winnersForPot.length);
       const remainder = pot.amount % winnersForPot.length;
@@ -260,7 +282,9 @@ function App() {
     );
 
     setCalcInput('');
-    setWinners({});
+    setWinnerIds([]);
+    setIsWinnerModalOpen(false);
+    setIsWinnerConfirmModalOpen(false);
     setStreetIndex(0);
     setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
@@ -285,11 +309,7 @@ function App() {
     setPlayers((prev) => {
       if (prev.length <= 1) return prev;
       const next = prev.filter((p) => p.id !== id);
-      setWinners((winnerMap) =>
-        Object.fromEntries(
-          Object.entries(winnerMap).map(([potId, winnerIds]) => [potId, winnerIds.filter((winnerId) => winnerId !== id)]),
-        ),
-      );
+      setWinnerIds((prevWinnerIds) => prevWinnerIds.filter((winnerId) => winnerId !== id));
 
       if (activePlayerId === id && next.length > 0) {
         setActivePlayerId(next[0].id);
@@ -297,6 +317,8 @@ function App() {
       return next;
     });
   };
+
+  const selectableWinners = players.filter((p) => !p.folded);
 
   return (
     <main className="min-h-screen bg-slate-100 p-4 text-slate-900">
@@ -374,11 +396,13 @@ function App() {
             <p className="text-sm font-medium">Total Pot: {totalPot}</p>
           </div>
 
-          {canAdvanceStreet && (
+          {canAdvanceStreet && currentStreet !== 'Showdown' && (
             <div className="rounded border border-blue-300 bg-blue-50 p-3">
-              <p className="text-sm font-medium">次: {streetLabelJa[nextStreet]}</p>
-              <button className="mt-2 rounded bg-blue-700 px-3 py-1 text-sm text-white" onClick={advanceStreet}>
-                OK
+              <button
+                className="rounded bg-blue-700 px-3 py-1 text-sm text-white"
+                onClick={() => setIsAdvanceStreetModalOpen(true)}
+              >
+                ストリートを進める
               </button>
             </div>
           )}
@@ -390,45 +414,17 @@ function App() {
                 <p className="text-sm font-medium">
                   {pot.id} - {pot.amount}
                 </p>
-                {currentStreet === 'Showdown' ? (
-                  <div className="mt-2 rounded-full border border-slate-300 bg-emerald-50 px-3 py-3">
-                    <div className="flex items-center justify-around gap-2 overflow-x-auto">
-                      {players
-                        .filter((p) => pot.eligiblePlayerIds.includes(p.id))
-                        .map((p) => {
-                          const selected = (winners[pot.id] ?? []).includes(p.id);
-                          return (
-                            <button
-                              key={p.id}
-                              onClick={() => handleWinnerToggle(pot.id, p.id)}
-                              disabled={p.folded}
-                              title={p.name}
-                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition ${
-                                p.folded
-                                  ? 'cursor-not-allowed border-slate-300 bg-slate-300 text-slate-600'
-                                  : selected
-                                    ? 'border-green-700 bg-green-600 text-white'
-                                    : 'border-slate-400 bg-white text-slate-700'
-                              }`}
-                            >
-                              {getNameBadge(p.name)}
-                            </button>
-                          );
-                        })}
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">ショーダウン中のみ勝者を選択できます（Foldは灰色表示）。</p>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-500">勝者選択はショーダウンで行います。</p>
-                )}
+                <p className="mt-2 text-xs text-slate-500">勝者選択はショーダウンでポップアップから行います。</p>
               </div>
             ))}
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button className="rounded bg-green-600 px-3 py-1 text-white" onClick={settleHand}>
-              Settle Hand
-            </button>
+            {currentStreet === 'Showdown' && (
+              <button className="rounded bg-green-600 px-3 py-1 text-white" onClick={() => setIsWinnerModalOpen(true)}>
+                勝者を選択
+              </button>
+            )}
           </div>
 
           <div className="rounded border border-slate-200 p-2">
@@ -459,7 +455,6 @@ function App() {
 
           <div className="mb-2 rounded border border-slate-300 bg-slate-50 p-3">
             <p className="truncate text-sm">{calcInput || '0'}</p>
-            <p className="text-lg font-semibold">= {Number.isFinite(evaluatedAmount) ? evaluatedAmount : 'ERR'}</p>
           </div>
 
           <div className="mb-2 grid grid-cols-3 gap-2">
@@ -480,15 +475,6 @@ function App() {
             ))}
           </div>
 
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor(totalPot / 2)))}>
-              1/2 Pot
-            </button>
-            <button className="rounded border bg-slate-100 p-2" onClick={() => setCalcInput(String(Math.floor((totalPot * 2) / 3)))}>
-              2/3 Pot
-            </button>
-          </div>
-
           <div className="grid grid-cols-3 gap-2">
             <button className="rounded bg-indigo-700 p-2 text-white" onClick={handleBetRaise}>
               Bet / Raise
@@ -502,6 +488,102 @@ function App() {
           </div>
         </section>
       </div>
+
+      {isAdvanceStreetModalOpen && (
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+            <h3 className="text-base font-semibold">次のストリートへ進みますか？</h3>
+            <p className="mt-2 text-sm text-slate-700">
+              {streetLabelJa[currentStreet]} → {streetLabelJa[nextStreet]}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded border border-slate-300 px-3 py-1 text-sm" onClick={() => setIsAdvanceStreetModalOpen(false)}>
+                キャンセル
+              </button>
+              <button
+                className="rounded bg-blue-700 px-3 py-1 text-sm text-white"
+                onClick={() => {
+                  advanceStreet();
+                  setIsAdvanceStreetModalOpen(false);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isWinnerModalOpen && currentStreet === 'Showdown' && (
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-4 shadow-xl">
+            <h3 className="text-base font-semibold">勝者選択</h3>
+            <div className="mt-3 rounded border border-slate-200 p-3">
+              <p className="text-sm text-slate-700">勝者を選択してください</p>
+              <div className="mt-3 overflow-hidden rounded border border-slate-200">
+                {selectableWinners.map((p) => {
+                  const selected = winnerIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => handleWinnerToggle(p.id)}
+                      className={`flex w-full items-center justify-between border-b border-slate-200 px-3 py-2 text-left text-sm last:border-b-0 ${
+                        selected ? 'bg-green-50' : 'bg-white'
+                      }`}
+                    >
+                      <span className="font-medium text-slate-800">{p.name}</span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-semibold ${
+                          selected ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {selected ? '選択中' : '未選択'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded border border-slate-300 px-3 py-1 text-sm" onClick={() => setIsWinnerModalOpen(false)}>
+                キャンセル
+              </button>
+              <button
+                className="rounded bg-green-700 px-3 py-1 text-sm text-white"
+                onClick={() => setIsWinnerConfirmModalOpen(true)}
+              >
+                一覧確認へ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isWinnerConfirmModalOpen && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+            <h3 className="text-base font-semibold">これであってる？</h3>
+            <div className="mt-3 space-y-1 text-sm">
+              {winnerPreview.map((row) => (
+                <p key={row.id}>
+                  {row.name}: +{row.gain} ({row.currentStack} → {row.nextStack})
+                </p>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded border border-slate-300 px-3 py-1 text-sm"
+                onClick={() => setIsWinnerConfirmModalOpen(false)}
+              >
+                戻る
+              </button>
+              <button className="rounded bg-green-700 px-3 py-1 text-sm text-white" onClick={settleHand}>
+                勝者確定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
