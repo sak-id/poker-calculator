@@ -32,7 +32,7 @@ const keypad = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '←'];
 
 function safeEval(raw: string): number {
   if (!raw.trim()) return 0;
-  if (!/^[0-9+\-*/ ().]+$/.test(raw)) return Number.NaN;
+  if (!/^[0-9+\-*/ ()]+$/.test(raw)) return Number.NaN;
 
   let index = 0;
 
@@ -171,11 +171,11 @@ function App() {
   const currentBet = useMemo(() => players.reduce((m, p) => Math.max(m, p.committed), 0), [players]);
   const activePlayer = players.find((p) => p.id === activePlayerId) ?? players[0];
 
-  const nextActiveId = (fromId: string) => {
-    const idx = players.findIndex((p) => p.id === fromId);
+  const nextActiveId = (fromId: string, playerList: Player[]) => {
+    const idx = playerList.findIndex((p) => p.id === fromId);
     if (idx === -1) return fromId;
-    for (let i = 1; i <= players.length; i += 1) {
-      const next = players[(idx + i) % players.length];
+    for (let i = 1; i <= playerList.length; i += 1) {
+      const next = playerList[(idx + i) % playerList.length];
       if (!next.folded && !next.allIn) return next.id;
     }
     return fromId;
@@ -186,32 +186,42 @@ function App() {
   };
 
   const commitToAmount = (id: string, targetCommitted: number, label: string) => {
+    let nextId = activePlayerId;
     setPlayers((prev) =>
-      prev.map((p) => {
-        if (p.id !== id) return p;
-        const safeTarget = Math.max(0, targetCommitted);
-        const needed = Math.max(0, safeTarget - p.committed);
-        const putIn = Math.min(needed, p.stack);
-        const committed = p.committed + putIn;
-        const stack = p.stack - putIn;
-        return {
-          ...p,
-          committed,
-          stack,
-          allIn: stack === 0,
-        };
-      }),
+      {
+        const updated = prev.map((p) => {
+          if (p.id !== id) return p;
+          const safeTarget = Math.max(0, targetCommitted);
+          const needed = Math.max(0, safeTarget - p.committed);
+          const putIn = Math.min(needed, p.stack);
+          const committed = p.committed + putIn;
+          const stack = p.stack - putIn;
+          return {
+            ...p,
+            committed,
+            stack,
+            allIn: stack === 0,
+          };
+        });
+        nextId = nextActiveId(id, updated);
+        return updated;
+      },
     );
 
     setLogs((prev) => [...prev, `${activePlayer.name}: ${label}`]);
-    setActivePlayerId(nextActiveId(id));
+    setActivePlayerId(nextId);
     setCalcInput('');
   };
 
   const handleFold = () => {
-    patchPlayer(activePlayer.id, (p) => ({ ...p, folded: true }));
+    let nextId = activePlayerId;
+    setPlayers((prev) => {
+      const updated = prev.map((p) => (p.id === activePlayer.id ? { ...p, folded: true } : p));
+      nextId = nextActiveId(activePlayer.id, updated);
+      return updated;
+    });
     setLogs((prev) => [...prev, `${activePlayer.name}: Fold`]);
-    setActivePlayerId(nextActiveId(activePlayer.id));
+    setActivePlayerId(nextId);
   };
 
   const handleCall = () => {
@@ -247,6 +257,16 @@ function App() {
   };
 
   const settleHand = () => {
+    const hasUnawardedPot = pots.some((pot) => {
+      if (pot.amount <= 0) return false;
+      const winnersForPot = (winners[pot.id] ?? []).filter((id) => pot.eligiblePlayerIds.includes(id));
+      return winnersForPot.length === 0;
+    });
+    if (hasUnawardedPot) {
+      setLogs((prev) => [...prev, 'Cannot settle: each pot needs at least one winner.']);
+      return;
+    }
+
     const payouts = new Map<string, number>();
 
     for (const pot of pots) {
@@ -298,6 +318,8 @@ function App() {
     ]);
   };
 
+  const activePlayerLocked = activePlayer.folded || activePlayer.allIn;
+
   return (
     <main className="min-h-screen bg-slate-100 p-4 text-slate-900">
       <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[1.2fr_0.9fr_1fr]">
@@ -341,7 +363,8 @@ function App() {
                     {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
                     <button
                       onClick={() => setActivePlayerId(p.id)}
-                      className="ml-auto rounded border px-2 py-0.5 text-xs"
+                      disabled={p.folded || p.allIn}
+                      className="ml-auto rounded border px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Select
                     </button>
@@ -460,16 +483,32 @@ function App() {
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <button className="rounded bg-slate-700 p-2 text-white" onClick={handleFold}>
+            <button
+              className="rounded bg-slate-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleFold}
+              disabled={activePlayerLocked}
+            >
               Fold
             </button>
-            <button className="rounded bg-blue-700 p-2 text-white" onClick={handleCall}>
+            <button
+              className="rounded bg-blue-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleCall}
+              disabled={activePlayerLocked}
+            >
               Call
             </button>
-            <button className="rounded bg-indigo-700 p-2 text-white" onClick={handleBetRaise}>
+            <button
+              className="rounded bg-indigo-700 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleBetRaise}
+              disabled={activePlayerLocked}
+            >
               Bet / Raise
             </button>
-            <button className="rounded bg-amber-600 p-2 text-white" onClick={handleAllIn}>
+            <button
+              className="rounded bg-amber-600 p-2 text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleAllIn}
+              disabled={activePlayerLocked}
+            >
               All-in
             </button>
           </div>
