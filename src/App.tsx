@@ -288,6 +288,7 @@ function App() {
     setWinners({});
     setIsWinnerModalOpen(false);
     setIsWinnerConfirmModalOpen(false);
+    setIsAdvanceStreetModalOpen(false);
     setStreetIndex(0);
     setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
