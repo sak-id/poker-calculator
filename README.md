@@ -15,6 +15,8 @@ npm run dev
 
 このリポジトリには GitHub Actions で Pages にデプロイするワークフローを含めています。
 
+公開URL: https://sak-id.github.io/poker-calculator/
+
 ### 1) GitHub の設定
 1. リポジトリの **Settings > Pages** を開く
 2. **Build and deployment** の Source を **GitHub Actions** に設定
