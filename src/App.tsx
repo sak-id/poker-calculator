@@ -149,6 +149,7 @@ function buildSidePots(players: Player[]): Pot[] {
 }
 
 const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committedRound), 0);
+const getNameBadge = (name: string) => (name.trim() || '??').slice(0, 2).toUpperCase();
 
 const nextActiveIdFrom = (players: Player[], fromId: string) => {
   const idx = players.findIndex((p) => p.id === fromId);
@@ -292,6 +293,9 @@ function App() {
   const middleActionLabel = amountToCall === 0 ? 'Check' : amountToCall >= activePlayer.stack ? 'All-in' : 'Call';
 
   const handleWinnerToggle = (potId: string, playerId: string) => {
+    if (currentStreet !== 'Showdown') return;
+    const target = players.find((p) => p.id === playerId);
+    if (!target || target.folded) return;
     setWinners((prev) => {
       const existing = prev[potId] ?? [];
       const next = existing.includes(playerId)
@@ -333,24 +337,6 @@ function App() {
     setStreetIndex(0);
     setActedPlayerIds([]);
     setLogs((prev) => [...prev, '--- Hand settled ---']);
-  };
-
-  const resetHand = () => {
-    setPlayers((prev) =>
-      prev.map((p) => ({
-        ...p,
-        stack: p.stack + p.committedHand,
-        committedRound: 0,
-        committedHand: 0,
-        folded: false,
-        allIn: false,
-      })),
-    );
-    setWinners({});
-    setCalcInput('');
-    setStreetIndex(0);
-    setActedPlayerIds([]);
-    setLogs((prev) => [...prev, '--- Hand reset (refund committed chips) ---']);
   };
 
   const addPlayer = () => {
@@ -477,22 +463,37 @@ function App() {
                 <p className="text-sm font-medium">
                   {pot.id} - {pot.amount}
                 </p>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {players
-                    .filter((p) => pot.eligiblePlayerIds.includes(p.id))
-                    .map((p) => {
-                      const selected = (winners[pot.id] ?? []).includes(p.id);
-                      return (
-                        <button
-                          key={p.id}
-                          onClick={() => handleWinnerToggle(pot.id, p.id)}
-                          className={`rounded px-2 py-1 text-xs ${selected ? 'bg-green-600 text-white' : 'bg-slate-200'}`}
-                        >
-                          {p.name}
-                        </button>
-                      );
-                    })}
-                </div>
+                {currentStreet === 'Showdown' ? (
+                  <div className="mt-2 rounded-full border border-slate-300 bg-emerald-50 px-3 py-3">
+                    <div className="flex items-center justify-around gap-2 overflow-x-auto">
+                      {players
+                        .filter((p) => pot.eligiblePlayerIds.includes(p.id))
+                        .map((p) => {
+                          const selected = (winners[pot.id] ?? []).includes(p.id);
+                          return (
+                            <button
+                              key={p.id}
+                              onClick={() => handleWinnerToggle(pot.id, p.id)}
+                              disabled={p.folded}
+                              title={p.name}
+                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition ${
+                                p.folded
+                                  ? 'cursor-not-allowed border-slate-300 bg-slate-300 text-slate-600'
+                                  : selected
+                                    ? 'border-green-700 bg-green-600 text-white'
+                                    : 'border-slate-400 bg-white text-slate-700'
+                              }`}
+                            >
+                              {getNameBadge(p.name)}
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">ショーダウン中のみ勝者を選択できます（Foldは灰色表示）。</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">勝者選択はショーダウンで行います。</p>
+                )}
               </div>
             ))}
           </div>
@@ -500,9 +501,6 @@ function App() {
           <div className="flex flex-wrap gap-2">
             <button className="rounded bg-green-600 px-3 py-1 text-white" onClick={settleHand}>
               Settle Hand
-            </button>
-            <button className="rounded bg-slate-700 px-3 py-1 text-white" onClick={resetHand}>
-              Reset Hand
             </button>
           </div>
 
