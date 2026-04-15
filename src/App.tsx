@@ -50,21 +50,27 @@ function safeEval(raw: string): number {
   return Number(normalized);
 }
 
-  const contributors = players.filter((p) => p.committedHand > 0);
-  if (contributors.length === 0) return [];
+function calculatePayouts(pots: Pot[], winnerIds: string[]): Map<string, number> {
+  const payouts = new Map<string, number>();
 
-  const levels = [...new Set(contributors.map((p) => p.committedHand))].sort((a, b) => a - b);
-  const pots: Pot[] = [];
-  let prev = 0;
+  for (const pot of pots) {
+    const winnersForPot = winnerIds.filter((id) => pot.eligiblePlayerIds.includes(id));
+    if (winnersForPot.length === 0) continue;
 
-  levels.forEach((level) => {
-    const inLevel = contributors.filter((p) => p.committedHand >= level);
-    const amount = (level - prev) * inLevel.length;
-    if (amount > 0) {
-      const eligiblePlayerIds = inLevel.filter((p) => !p.folded).map((p) => p.id);
-      pots.push({
-        id: `pot-${prev}-${level}`,
-        amount,
+    const share = Math.floor(pot.amount / winnersForPot.length);
+    const remainder = pot.amount % winnersForPot.length;
+
+    winnersForPot.forEach((id, index) => {
+      const current = payouts.get(id) ?? 0;
+      const bonus = index < remainder ? 1 : 0;
+      payouts.set(id, current + share + bonus);
+    });
+  }
+
+  return payouts;
+}
+
+    const payouts = calculatePayouts(pots, winnerIds);
         eligiblePlayerIds,
       });
     }
@@ -230,20 +236,7 @@ function App() {
 
   const advanceStreet = () => {
     if (!canAdvanceStreet) return;
-    const fromStreet = currentStreet;
-    const toStreet = nextStreet;
-    setPlayers((prev) => prev.map((p) => ({ ...p, committedRound: 0 })));
-    setStreetIndex((prev) => Math.min(prev + 1, streetOrder.length - 1));
-    setActedPlayerIds([]);
-    setCalcInput('');
-    setLogs((prev) => [...prev, `--- ${fromStreet} -> ${toStreet} ---`]);
-  };
-
-  const handleCheckCallAllIn = () => {
-    commitToAmount(activePlayer.id, currentBet, 'call');
-  };
-
-  const amountToCall = Math.max(0, currentBet - activePlayer.committedRound);
+    const payouts = calculatePayouts(pots, winnerIds);
   const middleActionLabel = amountToCall === 0 ? 'Check' : amountToCall >= activePlayer.stack ? 'All-in' : 'Call';
 
   const handleWinnerToggle = (potId: string, playerId: string) => {
