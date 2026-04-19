@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Player = {
   id: string;
@@ -17,18 +17,27 @@ type Pot = {
 };
 
 type WinnerMap = Record<string, string[]>;
+type StreetCommitments = Record<string, Partial<Record<Street, number>>>;
 
 type CommitKind = 'call' | 'betOrRaise';
 type Street = 'Preflop' | 'Flop' | 'Turn' | 'River' | 'Showdown';
+type BettingStreet = Exclude<Street, 'Showdown'>;
 
 const DEFAULT_STACK = 1000;
 const streetOrder: Street[] = ['Preflop', 'Flop', 'Turn', 'River', 'Showdown'];
+const bettingStreetOrder: BettingStreet[] = ['Preflop', 'Flop', 'Turn', 'River'];
 const streetLabelJa: Record<Street, string> = {
   Preflop: 'プリフロップ',
   Flop: 'フロップ',
   Turn: 'ターン',
   River: 'リバー',
   Showdown: 'ショーダウン',
+};
+const streetTableLabelJa: Record<BettingStreet, string> = {
+  Preflop: '前',
+  Flop: 'フロップ',
+  Turn: 'ターン',
+  River: 'リバー',
 };
 
 const initialPlayers = Array.from({ length: 4 }, (_, i) => ({
@@ -91,15 +100,15 @@ function App() {
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
   const [activePlayerId, setActivePlayerId] = useState<string>(initialPlayers[0].id);
   const [isPlayersCollapsed, setIsPlayersCollapsed] = useState(false);
-  const [isActionLogCollapsed, setIsActionLogCollapsed] = useState(false);
   const [calcInput, setCalcInput] = useState('');
-  const [logs, setLogs] = useState<string[]>([]);
   const [winners, setWinners] = useState<WinnerMap>({});
+  const [streetCommitments, setStreetCommitments] = useState<StreetCommitments>({});
   const [isAdvanceStreetModalOpen, setIsAdvanceStreetModalOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
   const [isWinnerConfirmModalOpen, setIsWinnerConfirmModalOpen] = useState(false);
   const [streetIndex, setStreetIndex] = useState(0);
   const [actedPlayerIds, setActedPlayerIds] = useState<string[]>([]);
+  const [lastAdvancePromptKey, setLastAdvancePromptKey] = useState('');
 
   const evaluatedAmount = useMemo(() => {
     const value = safeEval(calcInput);
@@ -107,7 +116,6 @@ function App() {
   }, [calcInput]);
 
   const pots = useMemo(() => buildSidePots(players), [players]);
-  const totalPot = useMemo(() => players.reduce((sum, p) => sum + p.committedHand, 0), [players]);
   const currentBet = useMemo(() => getCurrentBet(players), [players]);
   const activePlayer = players.find((p) => p.id === activePlayerId) ?? players[0];
   const currentStreet = streetOrder[streetIndex];
@@ -119,6 +127,15 @@ function App() {
     activeNotAllInPlayers.every((p) => p.committedRound === activeNotAllInPlayers[0].committedRound);
   const allActionablePlayersActed = activeNotAllInPlayerIds.every((id) => actedPlayerIds.includes(id));
   const canAdvanceStreet = allActionablePlayersActed && isRoundBalanced && streetIndex < streetOrder.length - 1;
+  const advancePromptKey = useMemo(
+    () =>
+      [
+        streetIndex,
+        actedPlayerIds.slice().sort().join(','),
+        players.map((p) => `${p.id}:${p.committedRound}:${p.folded ? 'f' : '-'}:${p.allIn ? 'a' : '-'}`).join('|'),
+      ].join('::'),
+    [actedPlayerIds, players, streetIndex],
+  );
   const winnerPreview = useMemo(() => {
     const payouts = new Map<string, number>();
 
@@ -144,6 +161,12 @@ function App() {
       nextStack: p.stack + (payouts.get(p.id) ?? 0),
     }));
   }, [players, pots, winners]);
+
+  useEffect(() => {
+    if (!canAdvanceStreet || currentStreet === 'Showdown' || lastAdvancePromptKey === advancePromptKey) return;
+    setLastAdvancePromptKey(advancePromptKey);
+    setIsAdvanceStreetModalOpen(true);
+  }, [advancePromptKey, canAdvanceStreet, currentStreet, lastAdvancePromptKey]);
 
   const patchPlayer = (id: string, updater: (p: Player) => Player) => {
     setPlayers((prev) => prev.map((p) => (p.id === id ? updater(p) : p)));
@@ -174,34 +197,22 @@ function App() {
     const nextActive = nextActiveIdFrom(nextPlayers, id);
     const betBeforeAction = getCurrentBet(players);
 
-    let logLabel = '';
     let nextActedPlayerIds = actedPlayerIds.includes(id) ? actedPlayerIds : [...actedPlayerIds, id];
-    if (kind === 'call') {
-      if (needed === 0) {
-        logLabel = 'Check';
-      } else if (stackAfter === 0 && committedRoundAfter < betBeforeAction) {
-        logLabel = `All-in Call ${committedRoundAfter}`;
-      } else {
-        logLabel = `Call ${committedRoundAfter}`;
-      }
-    } else if (kind === 'betOrRaise') {
-      if (stackAfter === 0 && committedRoundAfter < safeTarget) {
-        logLabel = `All-in ${committedRoundAfter}`;
-      } else if (betBeforeAction === 0) {
-        logLabel = `Bet ${committedRoundAfter}`;
-      } else {
-        logLabel = `Raise ${committedRoundAfter}`;
-      }
-      if (committedRoundAfter > betBeforeAction) {
-        nextActedPlayerIds = [id];
-      }
+    if (kind === 'betOrRaise' && committedRoundAfter > betBeforeAction) {
+      nextActedPlayerIds = [id];
     }
 
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
     setCalcInput('');
     setActedPlayerIds(nextActedPlayerIds);
-    setLogs((prev) => [...prev, `${actorBefore.name}: ${logLabel}`]);
+    setStreetCommitments((prev) => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] ?? {}),
+        [currentStreet]: committedRoundAfter,
+      },
+    }));
   };
 
   const handleFold = () => {
@@ -211,7 +222,13 @@ function App() {
     setPlayers(nextPlayers);
     setActivePlayerId(nextActive);
     setActedPlayerIds((prev) => (prev.includes(activePlayer.id) ? prev : [...prev, activePlayer.id]));
-    setLogs((prev) => [...prev, `${activePlayer.name}: Fold`]);
+    setStreetCommitments((prev) => ({
+      ...prev,
+      [activePlayer.id]: {
+        ...(prev[activePlayer.id] ?? {}),
+        [currentStreet]: activePlayer.committedRound,
+      },
+    }));
   };
 
   const handleCall = () => {
@@ -230,13 +247,20 @@ function App() {
 
   const advanceStreet = () => {
     if (!canAdvanceStreet) return;
-    const fromStreet = currentStreet;
-    const toStreet = nextStreet;
+    setStreetCommitments((prev) => {
+      const nextCommitments: StreetCommitments = { ...prev };
+      players.forEach((p) => {
+        nextCommitments[p.id] = {
+          ...(nextCommitments[p.id] ?? {}),
+          [currentStreet]: p.committedRound,
+        };
+      });
+      return nextCommitments;
+    });
     setPlayers((prev) => prev.map((p) => ({ ...p, committedRound: 0 })));
     setStreetIndex((prev) => Math.min(prev + 1, streetOrder.length - 1));
     setActedPlayerIds([]);
     setCalcInput('');
-    setLogs((prev) => [...prev, `--- ${fromStreet} -> ${toStreet} ---`]);
   };
 
   const handleCheckCallAllIn = () => {
@@ -291,7 +315,7 @@ function App() {
     setIsAdvanceStreetModalOpen(false);
     setStreetIndex(0);
     setActedPlayerIds([]);
-    setLogs((prev) => [...prev, '--- Hand settled ---']);
+    setStreetCommitments({});
   };
 
   const addPlayer = () => {
@@ -310,20 +334,32 @@ function App() {
   };
 
   const removePlayer = (id: string) => {
-    setPlayers((prev) => {
-      if (prev.length <= 1) return prev;
-      const next = prev.filter((p) => p.id !== id);
-      setWinners((winnerMap) =>
-        Object.fromEntries(
-          Object.entries(winnerMap).map(([potId, winnerIds]) => [potId, winnerIds.filter((winnerId) => winnerId !== id)]),
-        ),
-      );
-
-      if (activePlayerId === id && next.length > 0) {
-        setActivePlayerId(next[0].id);
-      }
-      return next;
+    if (players.length <= 1) return;
+    const next = players.filter((p) => p.id !== id);
+    setPlayers(next);
+    setWinners((winnerMap) =>
+      Object.fromEntries(
+        Object.entries(winnerMap).map(([potId, winnerIds]) => [potId, winnerIds.filter((winnerId) => winnerId !== id)]),
+      ),
+    );
+    setStreetCommitments((prev) => {
+      const nextCommitments = { ...prev };
+      delete nextCommitments[id];
+      return nextCommitments;
     });
+
+    if (activePlayerId === id && next.length > 0) {
+      setActivePlayerId(next[0].id);
+    }
+  };
+
+  const getStreetCommitmentDisplay = (player: Player, street: Street) => {
+    if (street === 'Showdown') return '-';
+    const targetStreetIndex = streetOrder.indexOf(street);
+    if (targetStreetIndex > streetIndex) return '-';
+    if (targetStreetIndex === streetIndex) return String(player.committedRound);
+    const committed = streetCommitments[player.id]?.[street];
+    return committed === undefined ? '-' : String(committed);
   };
 
   return (
@@ -394,33 +430,78 @@ function App() {
           )}
         </section>
 
-        <section className="space-y-4 rounded-xl bg-white p-4 shadow">
-          <h2 className="text-lg font-semibold">Pot & Showdown</h2>
-          <div className="rounded border border-slate-200 bg-slate-50 p-3">
-            <p className="text-sm">Street: {streetLabelJa[currentStreet]}</p>
-            <p className="text-sm">Current Bet: {currentBet}</p>
-            <p className="text-sm font-medium">Total Pot: {totalPot}</p>
+        <section className="space-y-3 rounded-xl bg-white p-4 shadow">
+          <div className="overflow-x-auto rounded border border-slate-200">
+            <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
+              <colgroup>
+                <col style={{ width: '28%' }} />
+                {bettingStreetOrder.map((street) => (
+                  <col key={street} style={{ width: '18%' }} />
+                ))}
+              </colgroup>
+              <thead>
+                <tr className="bg-slate-100 text-slate-600">
+                  <th className="px-2 py-2 text-left font-semibold">名前</th>
+                  {bettingStreetOrder.map((street) => (
+                    <th
+                      key={street}
+                      className={`px-2 py-2 text-center font-semibold ${
+                        street === currentStreet ? 'bg-blue-100 text-blue-800' : ''
+                      }`}
+                    >
+                      {streetTableLabelJa[street]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {players.map((p) => {
+                  const rowTone = p.folded
+                    ? 'bg-slate-100 text-slate-400'
+                    : p.allIn
+                      ? 'bg-amber-50 text-amber-950'
+                      : 'bg-white text-slate-800';
+                  return (
+                    <tr key={p.id} className={`border-t border-slate-200 ${rowTone}`}>
+                      <th className="truncate px-2 py-2 text-left font-medium">{p.name}</th>
+                      {bettingStreetOrder.map((street) => {
+                        const currentColumn = street === currentStreet;
+                        const activeCell = currentColumn && p.id === activePlayerId && !p.folded && !p.allIn;
+                        const cellTone = p.folded
+                          ? currentColumn
+                            ? 'bg-slate-200'
+                            : 'bg-slate-100'
+                          : p.allIn
+                            ? currentColumn
+                              ? 'bg-amber-100'
+                              : 'bg-amber-50'
+                            : currentColumn
+                              ? 'bg-blue-50 text-blue-900'
+                              : 'bg-white';
+
+                        return (
+                          <td
+                            key={street}
+                            className={`border-l border-slate-200 px-2 py-2 text-center font-mono tabular-nums ${cellTone} ${
+                              activeCell ? 'bg-blue-100 font-semibold ring-2 ring-inset ring-blue-500' : ''
+                            }`}
+                          >
+                            {getStreetCommitmentDisplay(p, street)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-
-          {canAdvanceStreet && currentStreet !== 'Showdown' && (
-            <div className="rounded border border-blue-300 bg-blue-50 p-3">
-              <button
-                className="rounded bg-blue-700 px-3 py-1 text-sm text-white"
-                onClick={() => setIsAdvanceStreetModalOpen(true)}
-              >
-                ストリートを進める
-              </button>
-            </div>
-          )}
-
-          <div className="space-y-2">
+          <div className="space-y-1">
             {pots.length === 0 && <p className="text-sm text-slate-500">ポットはまだありません。</p>}
-            {pots.map((pot) => (
-              <div key={pot.id} className="rounded border border-slate-200 p-2">
-                <p className="text-sm font-medium">
-                  {pot.id} - {pot.amount}
-                </p>
-                <p className="mt-2 text-xs text-slate-500">勝者選択はショーダウンでポップアップから行います。</p>
+            {pots.map((pot, index) => (
+              <div key={pot.id} className="flex items-center justify-between rounded border border-slate-200 px-2 py-1 text-sm">
+                <span className="font-medium text-slate-700">{index === 0 ? 'Main pot' : `Side pot ${index}`}</span>
+                <span className="font-semibold">{pot.amount}</span>
               </div>
             ))}
           </div>
@@ -432,33 +513,9 @@ function App() {
               </button>
             )}
           </div>
-
-          <div className="rounded border border-slate-200 p-2">
-            <div className="mb-1 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">Action Log</h3>
-              <button
-                className="rounded border border-slate-300 px-2 py-0.5 text-xs"
-                onClick={() => setIsActionLogCollapsed((prev) => !prev)}
-                aria-expanded={!isActionLogCollapsed}
-                aria-controls="action-log-panel"
-              >
-                {isActionLogCollapsed ? 'Expand' : 'Collapse'}
-              </button>
-            </div>
-            {!isActionLogCollapsed && (
-              <div id="action-log-panel" className="max-h-48 space-y-1 overflow-auto text-xs">
-                {logs.map((log, i) => (
-                  <p key={`${log}-${i}`}>{log}</p>
-                ))}
-              </div>
-            )}
-          </div>
         </section>
 
         <section className="rounded-xl bg-white p-4 shadow">
-          <h2 className="mb-2 text-lg font-semibold">Calculator / Action</h2>
-          <p className="mb-2 text-sm text-slate-600">Active: {activePlayer?.name}</p>
-
           <div className="mb-2 rounded border border-slate-300 bg-slate-50 p-3">
             <p className="truncate text-sm">{calcInput || '0'}</p>
           </div>
