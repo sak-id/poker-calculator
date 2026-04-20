@@ -25,7 +25,7 @@ export function GamePanel({ game }: GamePanelProps) {
 
   return (
     <>
-      <section className="space-y-3 rounded-xl bg-white p-4 shadow">
+      <section className="min-w-0 space-y-3 rounded-xl bg-white p-4 shadow">
         <div className="overflow-x-auto rounded border border-slate-200">
           <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
             <colgroup>
@@ -110,7 +110,7 @@ export function GamePanel({ game }: GamePanelProps) {
         </div>
       </section>
 
-      <section className="rounded-xl bg-white p-4 shadow">
+      <section className="min-w-0 rounded-xl bg-white p-4 shadow">
         <div className="mb-2 rounded border border-slate-300 bg-slate-50 p-3">
           <p className="truncate text-sm">{calcInput || '0'}</p>
         </div>

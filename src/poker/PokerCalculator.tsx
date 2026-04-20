@@ -25,7 +25,7 @@ export function PokerCalculator() {
 
   return (
     <main className="min-h-screen bg-slate-100 p-4 text-slate-900">
-      <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[1.2fr_0.9fr_1fr]">
+      <div className="mx-auto grid max-w-7xl items-start gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)]">
         <PlayersPanel game={game} />
         <GamePanel game={game} />
       </div>

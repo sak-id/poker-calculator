@@ -25,7 +25,7 @@ export function PlayersPanel({ game }: PlayersPanelProps) {
   } = game;
 
   return (
-    <section className="rounded-xl bg-white p-4 shadow">
+    <section className="min-w-0 rounded-xl bg-white p-4 shadow">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Players</h2>
         <div className="flex items-center gap-2">
@@ -83,7 +83,7 @@ export function PlayersPanel({ game }: PlayersPanelProps) {
                     aria-label={`${player.name} name`}
                     value={player.name}
                     onChange={(e) => patchPlayer(player.id, (current) => ({ ...current, name: e.target.value }))}
-                    className="rounded border px-2 py-1"
+                    className="min-w-0 rounded border px-2 py-1"
                   />
                   <span className="text-xs text-slate-500">Stack</span>
                   <input
@@ -97,7 +97,7 @@ export function PlayersPanel({ game }: PlayersPanelProps) {
                     className="w-24 rounded border px-2 py-1"
                   />
                 </div>
-                <div className="mt-2 flex items-center gap-2 text-sm">
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                   {seatLabels.map((label) => (
                     <span key={label} className="rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">
                       {label}
