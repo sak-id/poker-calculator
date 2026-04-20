@@ -23,7 +23,9 @@ type CommitKind = 'call' | 'betOrRaise';
 type Street = 'Preflop' | 'Flop' | 'Turn' | 'River' | 'Showdown';
 type BettingStreet = Exclude<Street, 'Showdown'>;
 
-const DEFAULT_STACK = 1000;
+const DEFAULT_STACK = 100;
+const DEFAULT_SMALL_BLIND = 5;
+const DEFAULT_BIG_BLIND = 10;
 const streetOrder: Street[] = ['Preflop', 'Flop', 'Turn', 'River', 'Showdown'];
 const bettingStreetOrder: BettingStreet[] = ['Preflop', 'Flop', 'Turn', 'River'];
 const streetLabelJa: Record<Street, string> = {
@@ -86,14 +88,39 @@ function buildSidePots(players: Player[]): Pot[] {
 
 const getCurrentBet = (players: Player[]) => players.reduce((m, p) => Math.max(m, p.committedRound), 0);
 
+const nextActiveIdAfterIndex = (players: Player[], fromIndex: number) => {
+  if (players.length === 0) return '';
+  for (let i = 1; i <= players.length; i += 1) {
+    const next = players[(fromIndex + i) % players.length];
+    if (!next.folded && !next.allIn) return next.id;
+  }
+  return players[fromIndex]?.id ?? players[0].id;
+};
+
 const nextActiveIdFrom = (players: Player[], fromId: string) => {
   const idx = players.findIndex((p) => p.id === fromId);
   if (idx === -1) return fromId;
-  for (let i = 1; i <= players.length; i += 1) {
-    const next = players[(idx + i) % players.length];
-    if (!next.folded && !next.allIn) return next.id;
-  }
-  return fromId;
+  return nextActiveIdAfterIndex(players, idx);
+};
+
+const getBlindSeatIndexes = (playerCount: number) => {
+  if (playerCount < 2) return null;
+  return {
+    dealer: 0,
+    smallBlind: playerCount === 2 ? 0 : 1,
+    bigBlind: playerCount === 2 ? 1 : 2,
+  };
+};
+
+const getSeatLabels = (index: number, playerCount: number) => {
+  const seats = getBlindSeatIndexes(playerCount);
+  if (!seats) return [];
+
+  const labels: string[] = [];
+  if (index === seats.dealer) labels.push('D');
+  if (index === seats.smallBlind) labels.push('SB');
+  if (index === seats.bigBlind) labels.push('BB');
+  return labels;
 };
 
 function App() {
@@ -109,6 +136,8 @@ function App() {
   const [streetIndex, setStreetIndex] = useState(0);
   const [actedPlayerIds, setActedPlayerIds] = useState<string[]>([]);
   const [lastAdvancePromptKey, setLastAdvancePromptKey] = useState('');
+  const [smallBlind, setSmallBlind] = useState(DEFAULT_SMALL_BLIND);
+  const [bigBlind, setBigBlind] = useState(DEFAULT_BIG_BLIND);
 
   const evaluatedAmount = useMemo(() => {
     const value = safeEval(calcInput);
@@ -127,6 +156,8 @@ function App() {
     activeNotAllInPlayers.every((p) => p.committedRound === activeNotAllInPlayers[0].committedRound);
   const allActionablePlayersActed = activeNotAllInPlayerIds.every((id) => actedPlayerIds.includes(id));
   const canAdvanceStreet = allActionablePlayersActed && isRoundBalanced && streetIndex < streetOrder.length - 1;
+  const canPostBlinds = currentStreet === 'Preflop' && players.length >= 2 && players.every((p) => p.committedHand === 0);
+  const blindSeatIndexes = getBlindSeatIndexes(players.length);
   const advancePromptKey = useMemo(
     () =>
       [
@@ -257,8 +288,50 @@ function App() {
       });
       return nextCommitments;
     });
-    setPlayers((prev) => prev.map((p) => ({ ...p, committedRound: 0 })));
+    const nextPlayers = players.map((p) => ({ ...p, committedRound: 0 }));
+    setPlayers(nextPlayers);
+    setActivePlayerId(nextActiveIdAfterIndex(nextPlayers, 0));
     setStreetIndex((prev) => Math.min(prev + 1, streetOrder.length - 1));
+    setActedPlayerIds([]);
+    setCalcInput('');
+  };
+
+  const postBlinds = () => {
+    if (!canPostBlinds || !blindSeatIndexes) return;
+    const smallBlindPlayer = players[blindSeatIndexes.smallBlind];
+    const bigBlindPlayer = players[blindSeatIndexes.bigBlind];
+    const blindByPlayerId = new Map([
+      [smallBlindPlayer.id, smallBlind],
+      [bigBlindPlayer.id, bigBlind],
+    ]);
+
+    const nextPlayers = players.map((p) => {
+      const blind = blindByPlayerId.get(p.id);
+      if (blind === undefined) return p;
+      const putIn = Math.min(Math.max(0, blind), p.stack);
+      const stackAfter = p.stack - putIn;
+      return {
+        ...p,
+        stack: stackAfter,
+        committedRound: putIn,
+        committedHand: putIn,
+        allIn: stackAfter === 0,
+      };
+    });
+
+    setPlayers(nextPlayers);
+    setStreetCommitments((prev) => ({
+      ...prev,
+      [smallBlindPlayer.id]: {
+        ...(prev[smallBlindPlayer.id] ?? {}),
+        Preflop: Math.min(Math.max(0, smallBlind), smallBlindPlayer.stack),
+      },
+      [bigBlindPlayer.id]: {
+        ...(prev[bigBlindPlayer.id] ?? {}),
+        Preflop: Math.min(Math.max(0, bigBlind), bigBlindPlayer.stack),
+      },
+    }));
+    setActivePlayerId(nextActiveIdFrom(nextPlayers, bigBlindPlayer.id));
     setActedPlayerIds([]);
     setCalcInput('');
   };
@@ -333,6 +406,19 @@ function App() {
     ]);
   };
 
+  const movePlayer = (id: string, direction: -1 | 1) => {
+    setPlayers((prev) => {
+      const fromIndex = prev.findIndex((p) => p.id === id);
+      const toIndex = fromIndex + direction;
+      if (fromIndex === -1 || toIndex < 0 || toIndex >= prev.length) return prev;
+
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
   const removePlayer = (id: string) => {
     if (players.length <= 1) return;
     const next = players.filter((p) => p.id !== id);
@@ -380,10 +466,42 @@ function App() {
               </button>
             </div>
           </div>
+          <div className="mb-3 grid grid-cols-[1fr_1fr_auto] gap-2 text-sm">
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-slate-500">SB</span>
+              <input
+                aria-label="Small blind"
+                type="number"
+                min={0}
+                value={smallBlind}
+                onChange={(e) => setSmallBlind(Math.max(0, Number(e.target.value || 0)))}
+                className="min-w-0 rounded border border-slate-300 px-2 py-1"
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-slate-500">BB</span>
+              <input
+                aria-label="Big blind"
+                type="number"
+                min={0}
+                value={bigBlind}
+                onChange={(e) => setBigBlind(Math.max(0, Number(e.target.value || 0)))}
+                className="min-w-0 rounded border border-slate-300 px-2 py-1"
+              />
+            </label>
+            <button
+              className="self-end rounded bg-slate-900 px-3 py-1 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={postBlinds}
+              disabled={!canPostBlinds}
+            >
+              Blinds
+            </button>
+          </div>
           {!isPlayersCollapsed && (
             <div className="space-y-2">
-              {players.map((p) => {
+              {players.map((p, index) => {
                 const active = p.id === activePlayerId;
+                const seatLabels = getSeatLabels(index, players.length);
                 return (
                   <div
                     key={p.id}
@@ -409,6 +527,11 @@ function App() {
                       />
                     </div>
                     <div className="mt-2 flex items-center gap-2 text-sm">
+                      {seatLabels.map((label) => (
+                        <span key={label} className="rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">
+                          {label}
+                        </span>
+                      ))}
                       <span>Committed: {p.committedHand}</span>
                       {p.folded && <span className="rounded bg-slate-200 px-2 py-0.5">Fold</span>}
                       {p.allIn && <span className="rounded bg-amber-200 px-2 py-0.5">All-in</span>}
@@ -418,6 +541,22 @@ function App() {
                         className="ml-auto rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Delete
+                      </button>
+                      <button
+                        onClick={() => movePlayer(p.id, -1)}
+                        disabled={index === 0}
+                        className="rounded border px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={`Move ${p.name} up`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() => movePlayer(p.id, 1)}
+                        disabled={index === players.length - 1}
+                        className="rounded border px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={`Move ${p.name} down`}
+                      >
+                        ↓
                       </button>
                       <button onClick={() => setActivePlayerId(p.id)} className="rounded border px-2 py-0.5 text-xs">
                         Select
